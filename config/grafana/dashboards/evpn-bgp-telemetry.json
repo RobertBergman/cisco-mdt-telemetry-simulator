@@ -103,7 +103,7 @@
             "type": "influxdb",
             "uid": "influxdb"
           },
-          "query": "from(bucket: \"telemetry\")\n  |> range(start: -5m)\n  |> filter(fn: (r) => r._measurement =~ /bgp.*Peer-list/)\n  |> filter(fn: (r) => r._field == \"state_code\")\n  |> last()\n  |> group(columns: [\"neighbor_address\"])\n  |> keep(columns: [\"_value\", \"neighbor_address\"])",
+          "query": "from(bucket: \"telemetry\")\n  |> range(start: -5m)\n  |> filter(fn: (r) => r._measurement =~ /bgp.*Peer-list/)\n  |> filter(fn: (r) => r._field == \"state_code\")\n  |> last()\n  |> map(fn: (r) => ({r with _field: r.neighbor_address}))\n  |> keep(columns: [\"_time\", \"_value\", \"_field\"])",
           "refId": "A"
         }
       ]
