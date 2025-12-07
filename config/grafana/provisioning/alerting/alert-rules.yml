@@ -1,0 +1,172 @@
+apiVersion: 1
+
+groups:
+  - orgId: 1
+    name: BGP Alerts
+    folder: Telemetry Alerts
+    interval: 10s
+    rules:
+      - uid: bgp-neighbor-down
+        title: BGP Neighbor Down
+        condition: C
+        data:
+          - refId: A
+            relativeTimeRange:
+              from: 60
+              to: 0
+            datasourceUid: influxdb
+            model:
+              query: |
+                from(bucket: "telemetry")
+                  |> range(start: -1m)
+                  |> filter(fn: (r) => r._measurement =~ /bgp/)
+                  |> filter(fn: (r) => r._field == "state_code")
+                  |> last()
+          - refId: B
+            relativeTimeRange:
+              from: 60
+              to: 0
+            datasourceUid: __expr__
+            model:
+              conditions:
+                - evaluator:
+                    params:
+                      - 6
+                    type: lt
+                  operator:
+                    type: and
+                  query:
+                    params:
+                      - A
+                  reducer:
+                    params: []
+                    type: last
+                  type: query
+              datasource:
+                type: __expr__
+                uid: __expr__
+              expression: A
+              intervalMs: 1000
+              maxDataPoints: 43200
+              reducer: last
+              type: threshold
+          - refId: C
+            relativeTimeRange:
+              from: 60
+              to: 0
+            datasourceUid: __expr__
+            model:
+              conditions:
+                - evaluator:
+                    params:
+                      - 0
+                    type: gt
+                  operator:
+                    type: and
+                  query:
+                    params:
+                      - B
+                  reducer:
+                    params: []
+                    type: count_non_null
+                  type: query
+              datasource:
+                type: __expr__
+                uid: __expr__
+              expression: B
+              intervalMs: 1000
+              maxDataPoints: 43200
+              reducer: count_non_null
+              type: threshold
+        noDataState: OK
+        execErrState: Error
+        for: 0s
+        annotations:
+          summary: "BGP neighbor is not in Established state"
+          description: "A BGP neighbor has transitioned away from Established state. Check the EVPN/BGP dashboard for details."
+        labels:
+          severity: critical
+          type: bgp
+
+      - uid: bgp-flap-detected
+        title: BGP Flap Detected
+        condition: C
+        data:
+          - refId: A
+            relativeTimeRange:
+              from: 300
+              to: 0
+            datasourceUid: influxdb
+            model:
+              query: |
+                from(bucket: "telemetry")
+                  |> range(start: -5m)
+                  |> filter(fn: (r) => r._measurement =~ /bgp/)
+                  |> filter(fn: (r) => r._field == "flap_count")
+                  |> difference()
+                  |> filter(fn: (r) => r._value > 0)
+          - refId: B
+            relativeTimeRange:
+              from: 300
+              to: 0
+            datasourceUid: __expr__
+            model:
+              conditions:
+                - evaluator:
+                    params:
+                      - 0
+                    type: gt
+                  operator:
+                    type: and
+                  query:
+                    params:
+                      - A
+                  reducer:
+                    params: []
+                    type: sum
+                  type: query
+              datasource:
+                type: __expr__
+                uid: __expr__
+              expression: A
+              intervalMs: 1000
+              maxDataPoints: 43200
+              reducer: sum
+              type: threshold
+          - refId: C
+            relativeTimeRange:
+              from: 300
+              to: 0
+            datasourceUid: __expr__
+            model:
+              conditions:
+                - evaluator:
+                    params:
+                      - 0
+                    type: gt
+                  operator:
+                    type: and
+                  query:
+                    params:
+                      - B
+                  reducer:
+                    params: []
+                    type: count_non_null
+                  type: query
+              datasource:
+                type: __expr__
+                uid: __expr__
+              expression: B
+              intervalMs: 1000
+              maxDataPoints: 43200
+              reducer: count_non_null
+              type: threshold
+        noDataState: OK
+        execErrState: Error
+        for: 0s
+        annotations:
+          summary: "BGP session flap detected"
+          description: "One or more BGP neighbors have experienced a flap in the last 5 minutes."
+        labels:
+          severity: warning
+          type: bgp
