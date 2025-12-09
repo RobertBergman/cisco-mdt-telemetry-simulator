@@ -60,11 +60,14 @@ services:
       context: ./cisco-mdt-generator
       dockerfile: Dockerfile
     container_name: mdt-generator
+    volumes:
+      - ./config:/app/config:ro
     command: >
       --server telegraf:57500
       --node leaf-101
       --interval 5s
       --flap-chance 0.02
+      --config /app/config/generator.yaml
     depends_on:
       - telegraf
     networks:

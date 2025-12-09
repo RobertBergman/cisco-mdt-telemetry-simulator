@@ -5,6 +5,7 @@ import (
 	"flag"
 	"log"
 	"math/rand"
+	"os"
 	"time"
 
 	"google.golang.org/grpc"
@@ -50,8 +51,21 @@ func main() {
 	nodeID := flag.String("node", "leaf-101", "Simulated NX-OS leaf node-id-str")
 	interval := flag.Duration("interval", 5*time.Second, "Interval between telemetry updates")
 	flapChance := flag.Float64("flap-chance", 0.02, "Chance of BGP neighbor flap per interval (0.0-1.0)")
+	configPath := flag.String("config", "config/generator.yaml", "Path to YAML configuration file")
 
 	flag.Parse()
+
+	// Load configuration with fallback to defaults
+	cfg, err := LoadConfig(*configPath)
+	if err != nil {
+		log.Fatalf("Failed to load configuration: %v", err)
+	}
+
+	if _, statErr := os.Stat(*configPath); statErr == nil {
+		log.Printf("Loaded configuration from: %s", *configPath)
+	} else {
+		log.Printf("Config file not found, using hardcoded defaults")
+	}
 
 	log.Printf("Connecting to MDT collector at %s ...", *server)
 
@@ -72,35 +86,22 @@ func main() {
 
 	log.Printf("MDT dial-out stream established. Sending telemetry every %s ...", interval.String())
 
-	// Initialize simulated state
+	// Initialize simulated state from configuration
 	startTime := time.Now()
 	reqID := int64(rand.Int63())
 
-	// VXLAN counters
-	var ingressBytes uint64 = 1_000_000
-	var egressBytes uint64 = 2_000_000
+	// VXLAN counters from config
+	ingressBytes := cfg.VXLAN.InitialIngressBytes
+	egressBytes := cfg.VXLAN.InitialEgressBytes
 
-	// BGP Neighbors (spine switches)
-	bgpNeighbors := []*BGPNeighbor{
-		{Address: "10.0.0.1", RemoteAS: 65001, State: "Established", StateCode: 6, PrefixesRecv: 150, PrefixesSent: 50, Uptime: 0, FlapCount: 0, LastFlap: startTime},
-		{Address: "10.0.0.2", RemoteAS: 65001, State: "Established", StateCode: 6, PrefixesRecv: 148, PrefixesSent: 50, Uptime: 0, FlapCount: 0, LastFlap: startTime},
-		{Address: "10.0.0.3", RemoteAS: 65002, State: "Established", StateCode: 6, PrefixesRecv: 145, PrefixesSent: 50, Uptime: 0, FlapCount: 0, LastFlap: startTime},
-	}
+	// BGP Neighbors from config
+	bgpNeighbors := initBGPNeighborsFromConfig(cfg, startTime)
 
-	// EVPN state
-	evpnState := &EVPNState{
-		Type2Routes: 120,
-		Type3Routes: 8,
-		Type5Routes: 45,
-		TotalRoutes: 173,
-	}
+	// EVPN state from config
+	evpnState := initEVPNStateFromConfig(cfg)
 
-	// VNI states
-	vniStates := []*VNIState{
-		{VNIID: 5000, State: "Up", StateCode: 1, MACCount: 45, VTEPCount: 3, ARPCount: 42},
-		{VNIID: 5001, State: "Up", StateCode: 1, MACCount: 32, VTEPCount: 3, ARPCount: 30},
-		{VNIID: 5002, State: "Up", StateCode: 1, MACCount: 28, VTEPCount: 3, ARPCount: 25},
-	}
+	// VNI states from config
+	vniStates := initVNIStatesFromConfig(cfg)
 
 	ticker := time.NewTicker(*interval)
 	defer ticker.Stop()
@@ -108,9 +109,11 @@ func main() {
 	for {
 		select {
 		case now := <-ticker.C:
-			// Update VXLAN counters
-			ingressBytes += uint64(1000 + rand.Intn(5000))
-			egressBytes += uint64(1500 + rand.Intn(5000))
+			// Update VXLAN counters using config ranges
+			ingressBytes += uint64(cfg.Simulation.Counters.VXLANIngressMin +
+				rand.Intn(cfg.Simulation.Counters.VXLANIngressMax-cfg.Simulation.Counters.VXLANIngressMin))
+			egressBytes += uint64(cfg.Simulation.Counters.VXLANEgressMin +
+				rand.Intn(cfg.Simulation.Counters.VXLANEgressMax-cfg.Simulation.Counters.VXLANEgressMin))
 
 			// Update BGP neighbor state (simulate occasional flaps)
 			for _, neighbor := range bgpNeighbors {
@@ -125,12 +128,16 @@ func main() {
 						neighbor.LastFlap = now
 						log.Printf("BGP neighbor %s FLAPPED to Idle (flap #%d)", neighbor.Address, neighbor.FlapCount)
 					} else {
-						// Small fluctuation in prefixes
-						neighbor.PrefixesRecv = uint32(int(neighbor.PrefixesRecv) + rand.Intn(5) - 2)
+						// Small fluctuation in prefixes using config
+						fluctuation := cfg.Simulation.Counters.BGPPrefixFluctuation
+						neighbor.PrefixesRecv = uint32(int(neighbor.PrefixesRecv) + rand.Intn(fluctuation*2+1) - fluctuation)
 					}
 				} else {
-					// Recover from flap after ~15-30 seconds
-					if now.Sub(neighbor.LastFlap) > time.Duration(15+rand.Intn(15))*time.Second {
+					// Recover from flap using config time range
+					recoveryTime := time.Duration(cfg.Simulation.FlapRecoveryMin +
+						rand.Intn(cfg.Simulation.FlapRecoveryMax-cfg.Simulation.FlapRecoveryMin)) * time.Second
+
+					if now.Sub(neighbor.LastFlap) > recoveryTime {
 						neighbor.State = "Established"
 						neighbor.StateCode = 6
 						neighbor.PrefixesRecv = uint32(140 + rand.Intn(20))
@@ -140,20 +147,29 @@ func main() {
 				}
 			}
 
-			// Update EVPN route counts (small fluctuations)
-			evpnState.Type2Routes = uint32(int(evpnState.Type2Routes) + rand.Intn(5) - 2)
-			evpnState.Type3Routes = uint32(int(evpnState.Type3Routes) + rand.Intn(3) - 1)
-			evpnState.Type5Routes = uint32(int(evpnState.Type5Routes) + rand.Intn(3) - 1)
+			// Update EVPN route counts using config fluctuations
+			type2Fluct := cfg.Simulation.Counters.EVPNType2Fluctuation
+			evpnState.Type2Routes = uint32(int(evpnState.Type2Routes) + rand.Intn(type2Fluct*2+1) - type2Fluct)
+
+			type3Fluct := cfg.Simulation.Counters.EVPNType3Fluctuation
+			evpnState.Type3Routes = uint32(int(evpnState.Type3Routes) + rand.Intn(type3Fluct*2+1) - type3Fluct)
+
+			type5Fluct := cfg.Simulation.Counters.EVPNType5Fluctuation
+			evpnState.Type5Routes = uint32(int(evpnState.Type5Routes) + rand.Intn(type5Fluct*2+1) - type5Fluct)
+
 			evpnState.TotalRoutes = evpnState.Type2Routes + evpnState.Type3Routes + evpnState.Type5Routes
 
-			// Update VNI state (small MAC fluctuations)
+			// Update VNI state using config fluctuations
 			for _, vni := range vniStates {
-				vni.MACCount = uint32(int(vni.MACCount) + rand.Intn(5) - 2)
-				vni.ARPCount = uint32(int(vni.ARPCount) + rand.Intn(3) - 1)
+				macFluct := cfg.Simulation.Counters.VNIMACFluctuation
+				vni.MACCount = uint32(int(vni.MACCount) + rand.Intn(macFluct*2+1) - macFluct)
+
+				arpFluct := cfg.Simulation.Counters.VNIARPFluctuation
+				vni.ARPCount = uint32(int(vni.ARPCount) + rand.Intn(arpFluct*2+1) - arpFluct)
 			}
 
 			// Send all telemetry messages
-			messages := buildAllTelemetry(now, *nodeID, ingressBytes, egressBytes, bgpNeighbors, evpnState, vniStates)
+			messages := buildAllTelemetry(now, *nodeID, ingressBytes, egressBytes, bgpNeighbors, evpnState, vniStates, cfg)
 
 			for _, telem := range messages {
 				payload, err := telem.Marshal()
@@ -180,13 +196,13 @@ func main() {
 }
 
 func buildAllTelemetry(t time.Time, nodeID string, ingressBytes, egressBytes uint64,
-	bgpNeighbors []*BGPNeighbor, evpnState *EVPNState, vniStates []*VNIState) []*telemetry.Telemetry {
+	bgpNeighbors []*BGPNeighbor, evpnState *EVPNState, vniStates []*VNIState, cfg *Config) []*telemetry.Telemetry {
 
 	var messages []*telemetry.Telemetry
 	ts := uint64(t.UnixMilli())
 
-	// 1. VXLAN interface stats
-	messages = append(messages, buildVxlanTelemetry(ts, nodeID, 5000, ingressBytes, egressBytes))
+	// 1. VXLAN interface stats using config values
+	messages = append(messages, buildVxlanTelemetry(ts, nodeID, cfg.VXLAN.VNIID, cfg.VXLAN.InterfaceName, ingressBytes, egressBytes))
 
 	// 2. BGP neighbor telemetry
 	messages = append(messages, buildBGPNeighborTelemetry(ts, nodeID, bgpNeighbors))
@@ -200,11 +216,11 @@ func buildAllTelemetry(t time.Time, nodeID string, ingressBytes, egressBytes uin
 	return messages
 }
 
-func buildVxlanTelemetry(ts uint64, nodeID string, vni uint32, ingressBytes, egressBytes uint64) *telemetry.Telemetry {
+func buildVxlanTelemetry(ts uint64, nodeID string, vni uint32, vniName string, ingressBytes, egressBytes uint64) *telemetry.Telemetry {
 	row := telemetry.RowField(
 		[]*telemetry.TelemetryField{
 			telemetry.Uint32Field("vni-id", vni, ts),
-			telemetry.StringField("name", "VNI-Leaf-Tenant-A", ts),
+			telemetry.StringField("name", vniName, ts),
 		},
 		[]*telemetry.TelemetryField{
 			telemetry.Uint64Field("ingress-bytes", ingressBytes, ts),

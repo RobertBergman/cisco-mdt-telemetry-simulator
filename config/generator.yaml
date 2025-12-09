@@ -1,0 +1,112 @@
+# Cisco MDT Telemetry Generator Configuration
+# This file configures the simulated network topology and behavior parameters
+
+# Simulation behavior parameters
+simulation:
+  # BGP flap recovery time range (seconds)
+  # When a BGP neighbor flaps to Idle, it will recover to Established after a random time in this range
+  flap_recovery_min: 15
+  flap_recovery_max: 30
+
+  # Counter increment and fluctuation ranges
+  counters:
+    # VXLAN traffic counter increments per interval (bytes)
+    vxlan_ingress_min: 1000
+    vxlan_ingress_max: 5000
+    vxlan_egress_min: 1500
+    vxlan_egress_max: 5000
+
+    # BGP prefix count fluctuation (±N prefixes per interval)
+    bgp_prefix_fluctuation: 5
+
+    # EVPN route count fluctuations (±N routes per interval)
+    evpn_type2_fluctuation: 5  # MAC/IP routes
+    evpn_type3_fluctuation: 3  # IMET routes
+    evpn_type5_fluctuation: 3  # IP Prefix routes
+
+    # VNI state fluctuations (±N per interval)
+    vni_mac_fluctuation: 5     # MAC address count changes
+    vni_arp_fluctuation: 3     # ARP entry count changes
+
+# VXLAN configuration
+vxlan:
+  # Initial byte counters
+  initial_ingress_bytes: 1000000
+  initial_egress_bytes: 2000000
+
+  # VNI identifier for telemetry path
+  vni_id: 5000
+
+  # Interface name displayed in telemetry
+  interface_name: "VNI-Leaf-Tenant-A"
+
+# BGP neighbor configurations (typically spine switches)
+bgp_neighbors:
+  - address: "10.0.0.1"
+    remote_as: 65001
+    initial_prefixes_recv: 150
+    initial_prefixes_sent: 50
+
+  - address: "10.0.0.2"
+    remote_as: 65001
+    initial_prefixes_recv: 148
+    initial_prefixes_sent: 50
+
+  - address: "10.0.0.3"
+    remote_as: 65002
+    initial_prefixes_recv: 145
+    initial_prefixes_sent: 50
+
+# EVPN route state (initial counts)
+evpn:
+  type2_routes: 120  # MAC/IP Advertisement routes
+  type3_routes: 8    # Inclusive Multicast Ethernet Tag routes
+  type5_routes: 45   # IP Prefix routes
+
+# VNI states (VXLAN Network Identifiers)
+vni_states:
+  - vni_id: 5000
+    initial_mac_count: 45
+    initial_vtep_count: 3
+    initial_arp_count: 42
+
+  - vni_id: 5001
+    initial_mac_count: 32
+    initial_vtep_count: 3
+    initial_arp_count: 30
+
+  - vni_id: 5002
+    initial_mac_count: 28
+    initial_vtep_count: 3
+    initial_arp_count: 25
+
+# Example: Simulating a larger topology
+# Uncomment and modify to simulate different network scenarios
+#
+# bgp_neighbors:
+#   - address: "10.0.0.1"
+#     remote_as: 65001
+#     initial_prefixes_recv: 200
+#     initial_prefixes_sent: 100
+#   - address: "10.0.0.2"
+#     remote_as: 65001
+#     initial_prefixes_recv: 200
+#     initial_prefixes_sent: 100
+#   - address: "10.0.0.3"
+#     remote_as: 65002
+#     initial_prefixes_recv: 180
+#     initial_prefixes_sent: 90
+#   - address: "10.0.0.4"
+#     remote_as: 65002
+#     initial_prefixes_recv: 180
+#     initial_prefixes_sent: 90
+#
+# vni_states:
+#   - vni_id: 6000
+#     initial_mac_count: 100
+#     initial_vtep_count: 5
+#     initial_arp_count: 95
+#   - vni_id: 6001
+#     initial_mac_count: 80
+#     initial_vtep_count: 5
+#     initial_arp_count: 75
